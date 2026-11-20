@@ -7,7 +7,10 @@ export async function POST(request) {
 
   if (!apiKey) {
     return Response.json(
-      { error: "GROQ_API_KEY is not set. Add it to .env.local and restart the server." },
+      {
+        error:
+          "GROQ_API_KEY is not set. Add it to .env.local locally or to your Vercel environment variables, then redeploy.",
+      },
       { status: 500 }
     );
   }
@@ -47,7 +50,7 @@ export async function POST(request) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+        model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
         messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
         temperature: 0.7,
         max_tokens: 2048,

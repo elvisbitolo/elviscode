@@ -8,7 +8,7 @@ A lightweight ChatGPT-style chat app for coding and authorized security work. Th
 2. Create `.env.local` in this folder:
    ```
    GROQ_API_KEY=your_key_here
-   GROQ_MODEL=llama-3.3-70b-versatile
+   GROQ_MODEL=openai/gpt-oss-120b
    ```
    (You can copy `.env.example` as a starting point.)
 3. Install and run:
