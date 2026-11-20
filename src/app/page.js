@@ -3,17 +3,31 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "../components/Markdown";
 import { runInSandbox } from "../lib/run-js";
+import { runInPython } from "../lib/run-python";
 import styles from "./page.module.css";
 
+const STORAGE_KEY = "elviscode.chat.v1";
+const MAX_ROUNDS = 8;
+
 const SUGGESTIONS = [
-  "Explain this code: function f(x){ return x*2 }",
   "Write a JS function that deduplicates an array",
+  "Use Python to compute the first 10 Fibonacci numbers",
   "What is on https://example.com?",
 ];
 
-const MAX_ROUNDS = 8;
+function activityFor(names) {
+  if (names.length > 1) return "Using tools";
+  if (names.includes("run_python")) return "Running Python";
+  if (names.includes("run_js")) return "Running JavaScript";
+  if (names.includes("fetch_rendered_page")) return "Rendering a page";
+  if (names.includes("fetch_url")) return "Fetching a web page";
+  return "Working";
+}
 
 export default function Home() {
+  const [auth, setAuth] = useState({ loading: true, required: false, unlocked: false });
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,20 +35,81 @@ export default function Home() {
   const [error, setError] = useState("");
   const threadRef = useRef(null);
   const historyRef = useRef([]);
+  const restoredRef = useRef(false);
+
+  useEffect(() => {
+    fetch("/api/session")
+      .then((response) => response.json())
+      .then((data) =>
+        setAuth({
+          loading: false,
+          required: Boolean(data.required),
+          unlocked: Boolean(data.unlocked),
+        })
+      )
+      .catch(() => setAuth({ loading: false, required: false, unlocked: true }));
+  }, []);
+
+  useEffect(() => {
+    if (auth.loading || !auth.unlocked || restoredRef.current) return;
+    restoredRef.current = true;
+
+    queueMicrotask(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+        if (!saved) return;
+        if (Array.isArray(saved.messages)) setMessages(saved.messages);
+        if (Array.isArray(saved.history)) historyRef.current = saved.history;
+      } catch {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    });
+  }, [auth]);
 
   useEffect(() => {
     const thread = threadRef.current;
     if (thread) thread.scrollTop = thread.scrollHeight;
   }, [messages, activity]);
 
+  function saveChat(nextMessages, nextHistory) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ messages: nextMessages, history: nextHistory }));
+    } catch {
+      return;
+    }
+  }
+
+  async function login(event) {
+    event.preventDefault();
+    setAuthError("");
+
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) {
+        setAuthError(data.error || "Could not sign in.");
+        return;
+      }
+      setPassword("");
+      setAuth((current) => ({ ...current, unlocked: true }));
+    } catch {
+      setAuthError("Could not sign in.");
+    }
+  }
+
   async function send(event, overrideText) {
     event?.preventDefault?.();
 
     const text = (overrideText ?? input).trim();
-    if (!text || busy) return;
+    if (!text || busy || (auth.required && !auth.unlocked)) return;
 
+    const previousHistory = historyRef.current;
     const base = [...messages, { role: "user", content: text }];
-    let history = [...historyRef.current, { role: "user", content: text }];
+    let history = [...previousHistory, { role: "user", content: text }];
 
     setMessages([...base, { role: "assistant", content: "", thinking: true }]);
     setInput("");
@@ -65,18 +140,19 @@ export default function Home() {
           break;
         }
 
-        const names = data.pending.map((call) => call.name);
-        setActivity(
-          names.includes("fetch_url") && names.includes("run_js")
-            ? "Fetching a page and running code"
-            : names.includes("fetch_url")
-              ? "Fetching a web page"
-              : "Running code"
-        );
+        setActivity(activityFor(data.pending.map((call) => call.name)));
 
         for (const call of data.pending) {
-          if (call.name !== "run_js") continue;
-          const result = await runInSandbox(call.code);
+          let result;
+
+          if (call.name === "run_js") {
+            result = await runInSandbox(call.code);
+          } else if (call.name === "run_python") {
+            result = await runInPython(call.code);
+          } else {
+            continue;
+          }
+
           history.push({
             role: "tool",
             tool_call_id: call.id,
@@ -89,11 +165,15 @@ export default function Home() {
         }
       }
 
+      const finalMessages = [...base, { role: "assistant", content: answer }];
       historyRef.current = history;
-      setMessages([...base, { role: "assistant", content: answer }]);
+      setMessages(finalMessages);
+      saveChat(finalMessages, history);
     } catch (cause) {
+      historyRef.current = previousHistory;
       setError(cause.message || "Something went wrong.");
       setMessages(base);
+      saveChat(base, previousHistory);
     } finally {
       setBusy(false);
       setActivity("");
@@ -113,6 +193,40 @@ export default function Home() {
     setError("");
     setActivity("");
     historyRef.current = [];
+    localStorage.removeItem(STORAGE_KEY);
+  }
+
+  if (auth.loading) {
+    return (
+      <div className={styles.gate}>
+        <div className={styles.gateCard}>Loading...</div>
+      </div>
+    );
+  }
+
+  if (auth.required && !auth.unlocked) {
+    return (
+      <div className={styles.gate}>
+        <form className={styles.gateCard} onSubmit={login}>
+          <span className={styles.welcomeLogo}>E</span>
+          <h1 className={styles.gateTitle}>ElvisCode</h1>
+          <p className={styles.gateText}>Enter the access password to continue.</p>
+          <input
+            className={styles.gateInput}
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Password"
+            aria-label="Password"
+            autoFocus
+          />
+          {authError ? <p className={styles.gateError}>{authError}</p> : null}
+          <button type="submit" className={styles.gateButton} disabled={!password}>
+            Unlock
+          </button>
+        </form>
+      </div>
+    );
   }
 
   return (
@@ -139,7 +253,7 @@ export default function Home() {
               <span className={styles.welcomeLogo}>E</span>
               <h1 className={styles.welcomeTitle}>What can I help you build?</h1>
               <p className={styles.welcomeText}>
-                Coding help, web page reading, and JavaScript you can actually run — all in one chat.
+                Coding help, web page reading, Python and JavaScript execution — all in one chat.
               </p>
               <div className={styles.suggestions}>
                 {SUGGESTIONS.map((prompt) => (

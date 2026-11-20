@@ -360,3 +360,101 @@
     font-size: 24px;
   }
 }
+
+.gate {
+  --background: #ffffff;
+  --foreground: #171717;
+  --panel: #ffffff;
+  --border: #e5e5e5;
+  --muted: #767676;
+  --accent: #171717;
+  --accent-text: #ffffff;
+  --error-text: #b91c1c;
+
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 20px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+.gateCard {
+  display: flex;
+  width: 100%;
+  max-width: 380px;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  text-align: center;
+}
+
+.gateTitle {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.gateText {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.gateInput {
+  width: 100%;
+  height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+}
+
+.gateInput:focus {
+  border-color: var(--accent);
+}
+
+.gateButton {
+  width: 100%;
+  height: 46px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gateButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.gateError {
+  color: var(--error-text);
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .gate {
+    --background: #0d0d0d;
+    --foreground: #ededed;
+    --panel: #1a1a1a;
+    --border: #2e2e2e;
+    --muted: #9b9b9b;
+    --accent: #ededed;
+    --accent-text: #0d0d0d;
+    --error-text: #fca5a5;
+  }
+}

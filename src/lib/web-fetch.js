@@ -198,6 +198,28 @@ async function requestOnce(rawUrl, redirectsLeft) {
   return htmlToText(content);
 }
 
+async function readLimitedText(response) {
+  const reader = response.body?.getReader();
+  if (!reader) return response.text();
+
+  const chunks = [];
+  let size = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > MAX_BYTES) throw new Error("Page is too large to read.");
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export async function fetchPage(rawUrl) {
   let url;
   try {
@@ -215,4 +237,47 @@ export async function fetchPage(rawUrl) {
     text,
     truncated: page.text.length > MAX_TEXT,
   };
+}
+
+export async function fetchRenderedPage(rawUrl) {
+  let url;
+  try {
+    url = new URL(String(rawUrl));
+  } catch {
+    throw new Error("Invalid URL.");
+  }
+
+  await validateHost(url.hostname, url.port);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25_000);
+
+  try {
+    const response = await fetch("https://r.jina.ai/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Respond-With": "markdown",
+        ...(process.env.JINA_API_KEY
+          ? { Authorization: `Bearer ${process.env.JINA_API_KEY}` }
+          : {}),
+      },
+      body: JSON.stringify({ url: url.toString() }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) throw new Error(`Page reader returned HTTP ${response.status}.`);
+
+    const full = await readLimitedText(response);
+    return {
+      url: url.toString(),
+      text: full.slice(0, MAX_TEXT),
+      truncated: full.length > MAX_TEXT,
+    };
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("Page reader took too long.");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }

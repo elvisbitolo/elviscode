@@ -1,5 +1,7 @@
-import { fetchPage } from "../../../lib/web-fetch";
+import { fetchPage, fetchRenderedPage } from "../../../lib/web-fetch";
 import { SYSTEM_PROMPT } from "../../../lib/system-prompt";
+import { isUnlocked } from "../../../lib/session";
+import { clientKey, rateLimit } from "../../../lib/rate-limit";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MAX_ROUNDS = 6;
@@ -11,6 +13,44 @@ const tools = [
       name: "fetch_url",
       description:
         "Fetch a public web page by URL and return its readable text. Use when the user provides a URL or asks about a specific page. Private and local network addresses are blocked.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "An absolute http or https URL.",
+          },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_python",
+      description:
+        "Execute Python code in a sandboxed browser iframe using Pyodide and return stdout plus the final expression. Use for Python calculations, data work, or verifying Python snippets. Standard library only; no network or file access.",
+      parameters: {
+        type: "object",
+        properties: {
+          code: {
+            type: "string",
+            description: "Python code to execute.",
+          },
+        },
+        required: ["code"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_rendered_page",
+      description:
+        "Read a public page through a headless browser and return it as markdown. Use when fetch_url returns little or no content, or for JavaScript-heavy pages and PDFs. Private and local network addresses are blocked.",
       parameters: {
         type: "object",
         properties: {
@@ -81,6 +121,18 @@ async function callModel(messages, apiKey) {
 }
 
 export async function POST(request) {
+  if (!isUnlocked(request)) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const limit = rateLimit(`chat:${clientKey(request)}`, 12, 60_000);
+  if (!limit.ok) {
+    return Response.json(
+      { error: "Rate limit reached. Try again shortly." },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfter) } }
+    );
+  }
+
   const apiKey = process.env.GROQ_API_KEY;
 
   if (!apiKey) {
@@ -155,9 +207,10 @@ export async function POST(request) {
           continue;
         }
 
-        if (name === "fetch_url") {
+        if (name === "fetch_url" || name === "fetch_rendered_page") {
           try {
-            const page = await fetchPage(args.url);
+            const page =
+              name === "fetch_url" ? await fetchPage(args.url) : await fetchRenderedPage(args.url);
             messages.push(
               toolResult(id, {
                 ok: true,
@@ -170,7 +223,7 @@ export async function POST(request) {
           } catch (error) {
             messages.push(toolResult(id, { ok: false, error: error.message }));
           }
-        } else if (name === "run_js") {
+        } else if (name === "run_js" || name === "run_python") {
           pending.push({ id, name, code: String(args.code || "") });
         } else {
           messages.push(toolResult(id, { ok: false, error: `Unknown tool: ${name}` }));
