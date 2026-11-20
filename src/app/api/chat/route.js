@@ -5,6 +5,12 @@ import { clientKey, rateLimit } from "../../../lib/rate-limit";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MAX_ROUNDS = 6;
+const MAX_BODY_BYTES = 96_000;
+const MAX_MESSAGES = 40;
+const MAX_MESSAGE_CHARS = 16_000;
+const MAX_TOOL_CALLS_PER_ROUND = 3;
+const MAX_TOOL_CODE_CHARS = 20_000;
+const ALLOWED_TOOLS = new Set(["fetch_url", "fetch_rendered_page", "run_js", "run_python"]);
 
 const tools = [
   {
@@ -93,6 +99,37 @@ function toolResult(id, value) {
   };
 }
 
+function validateMessages(input) {
+  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_MESSAGES) {
+    return { error: `Send between 1 and ${MAX_MESSAGES} messages.` };
+  }
+  const messages = [];
+  for (const message of input) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) return { error: "Invalid message format." };
+    if (!["user", "assistant", "tool"].includes(message.role)) return { error: "Unsupported message role." };
+    if (typeof message.content !== "string" || message.content.length > MAX_MESSAGE_CHARS) return { error: "Message content is invalid or too long." };
+    const clean = { role: message.role, content: message.content };
+    if (message.role === "tool") {
+      if (typeof message.tool_call_id !== "string" || message.tool_call_id.length > 128) return { error: "Invalid tool result identifier." };
+      clean.tool_call_id = message.tool_call_id;
+    }
+    if (message.role === "assistant" && message.tool_calls !== undefined) {
+      if (!Array.isArray(message.tool_calls) || message.tool_calls.length > MAX_TOOL_CALLS_PER_ROUND) return { error: "Invalid tool-call history." };
+      const calls = [];
+      for (const call of message.tool_calls) {
+        const id = call?.id, name = call?.function?.name, args = call?.function?.arguments;
+        if (typeof id !== "string" || id.length > 128 || !ALLOWED_TOOLS.has(name) || typeof args !== "string" || args.length > 8_000) return { error: "Invalid tool-call history." };
+        calls.push({ id, type: "function", function: { name, arguments: args } });
+      }
+      clean.tool_calls = calls;
+    }
+    messages.push(clean);
+  }
+  const last = messages[messages.length - 1];
+  if (last.role !== "user" && last.role !== "tool") return { error: "A user message is required." };
+  return { messages };
+}
+
 async function callModel(messages, apiKey) {
   const response = await fetch(GROQ_URL, {
     method: "POST",
@@ -100,6 +137,7 @@ async function callModel(messages, apiKey) {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({
       model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
       messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
@@ -145,34 +183,27 @@ export async function POST(request) {
     );
   }
 
+  if (!(request.headers.get("content-type") || "").toLowerCase().includes("application/json")) {
+    return Response.json({ error: "Content-Type must be application/json." }, { status: 415 });
+  }
+  const declaredLength = Number(request.headers.get("content-length") || 0);
+  if (declaredLength > MAX_BODY_BYTES) return Response.json({ error: "Request is too large." }, { status: 413 });
+
   let body;
   try {
-    body = await request.json();
+    const rawBody = await request.text();
+    if (new TextEncoder().encode(rawBody).length > MAX_BODY_BYTES) return Response.json({ error: "Request is too large." }, { status: 413 });
+    body = JSON.parse(rawBody);
   } catch {
     return Response.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const incoming = Array.isArray(body.messages) ? body.messages : [];
-  const messages = incoming
-    .filter((message) => {
-      if (!message || typeof message.content !== "string") return false;
-      if (message.role === "user" || message.role === "assistant") return true;
-      return message.role === "tool" && typeof message.tool_call_id === "string";
-    })
-    .slice(-40)
-    .map((message) => ({
-      role: message.role,
-      content: message.content.slice(0, 16000),
-      ...(message.role === "tool" ? { tool_call_id: message.tool_call_id } : {}),
-      ...(message.role === "assistant" && Array.isArray(message.tool_calls)
-        ? { tool_calls: message.tool_calls }
-        : {}),
-    }));
+  const validated = validateMessages(body?.messages);
+  if (validated.error) return Response.json({ error: validated.error }, { status: 400 });
+  const messages = validated.messages;
 
-  const last = messages[messages.length - 1];
-  if (!last || (last.role !== "user" && last.role !== "tool")) {
-    return Response.json({ error: "A user message is required." }, { status: 400 });
-  }
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return Response.json({ error: "GROQ_API_KEY is not configured on the server." }, { status: 500 });
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
@@ -183,7 +214,7 @@ export async function POST(request) {
         role: "assistant",
         content: typeof raw.content === "string" ? raw.content : "",
         ...(Array.isArray(raw.tool_calls) && raw.tool_calls.length > 0
-          ? { tool_calls: raw.tool_calls }
+          ? { tool_calls: raw.tool_calls.slice(0, MAX_TOOL_CALLS_PER_ROUND) }
           : {}),
       };
       messages.push(assistant);
@@ -208,6 +239,10 @@ export async function POST(request) {
         }
 
         if (name === "fetch_url" || name === "fetch_rendered_page") {
+          if (typeof args.url !== "string" || args.url.length > 2_048) {
+            messages.push(toolResult(id, { ok: false, error: "Invalid URL argument." }));
+            continue;
+          }
           try {
             const page =
               name === "fetch_url" ? await fetchPage(args.url) : await fetchRenderedPage(args.url);
@@ -224,7 +259,11 @@ export async function POST(request) {
             messages.push(toolResult(id, { ok: false, error: error.message }));
           }
         } else if (name === "run_js" || name === "run_python") {
-          pending.push({ id, name, code: String(args.code || "") });
+          if (typeof args.code !== "string" || args.code.length > MAX_TOOL_CODE_CHARS) {
+            messages.push(toolResult(id, { ok: false, error: "Code is invalid or too long." }));
+            continue;
+          }
+          pending.push({ id, name, code: args.code });
         } else {
           messages.push(toolResult(id, { ok: false, error: `Unknown tool: ${name}` }));
         }
@@ -240,6 +279,7 @@ export async function POST(request) {
       content: "I stopped after too many tool calls. Try a simpler request.",
     });
   } catch (error) {
+    if (error?.name === "TimeoutError") return Response.json({ error: "The model request timed out. Please try again." }, { status: 504 });
     return Response.json({ error: error.message || "Something went wrong." }, { status: 502 });
   }
 }
