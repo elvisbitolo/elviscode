@@ -6,9 +6,10 @@ import { clientKey, rateLimit } from "../../../lib/rate-limit";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MAX_ROUNDS = 6;
-const MAX_BODY_BYTES = 96_000;
+const MAX_BODY_BYTES = 512_000;
 const MAX_MESSAGES = 40;
-const MAX_MESSAGE_CHARS = 16_000;
+const MAX_MESSAGE_CHARS = 120_000;
+const MAX_TOOL_RESULT_CHARS = 16_000;
 const MAX_TOOL_CALLS_PER_ROUND = 3;
 const MAX_TOOL_CODE_CHARS = 20_000;
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
@@ -98,7 +99,7 @@ function toolResult(id, value) {
   return {
     role: "tool",
     tool_call_id: id,
-    content: JSON.stringify(value).slice(0, MAX_MESSAGE_CHARS),
+    content: JSON.stringify(value).slice(0, MAX_TOOL_RESULT_CHARS),
   };
 }
 
