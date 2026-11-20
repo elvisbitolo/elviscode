@@ -171,18 +171,6 @@ export async function POST(request) {
     );
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
-
-  if (!apiKey) {
-    return Response.json(
-      {
-        error:
-          "GROQ_API_KEY is not set. Add it to .env.local locally or to your Vercel environment variables, then redeploy.",
-      },
-      { status: 500 }
-    );
-  }
-
   if (!(request.headers.get("content-type") || "").toLowerCase().includes("application/json")) {
     return Response.json({ error: "Content-Type must be application/json." }, { status: 415 });
   }
@@ -210,11 +198,15 @@ export async function POST(request) {
       const raw = await callModel(messages, apiKey);
       if (!raw) throw new Error("The model returned an empty response.");
 
+      if (Array.isArray(raw.tool_calls) && raw.tool_calls.length > MAX_TOOL_CALLS_PER_ROUND) {
+        return Response.json({ error: "The model requested too many tools at once. Please try again." }, { status: 502 });
+      }
+
       const assistant = {
         role: "assistant",
         content: typeof raw.content === "string" ? raw.content : "",
         ...(Array.isArray(raw.tool_calls) && raw.tool_calls.length > 0
-          ? { tool_calls: raw.tool_calls.slice(0, MAX_TOOL_CALLS_PER_ROUND) }
+          ? { tool_calls: raw.tool_calls }
           : {}),
       };
       messages.push(assistant);
