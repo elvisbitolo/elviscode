@@ -5,7 +5,13 @@ import { track } from "@vercel/analytics/react";
 import Markdown from "../components/Markdown";
 import { runInSandbox } from "../lib/run-js";
 import { runInPython } from "../lib/run-python";
+import { activityLabel } from "../lib/tool-registry";
 import styles from "./page.module.css";
+
+const CLIENT_TOOLS = {
+  run_js: runInSandbox,
+  run_python: runInPython,
+};
 
 const CHATS_KEY = "elviscode.chats.v2";
 const ACTIVE_KEY = "elviscode.active.v2";
@@ -49,16 +55,6 @@ function titleFrom(text) {
 function estimateCost(model, usage) {
   const [inputRate, outputRate] = RATES[model] || [0, 0];
   return ((usage.prompt_tokens || 0) * inputRate + (usage.completion_tokens || 0) * outputRate) / 1_000_000;
-}
-
-function activityFor(names) {
-  if (names.length > 1) return "Using tools";
-  if (names.includes("run_python")) return "Running Python";
-  if (names.includes("run_js")) return "Running JavaScript";
-  if (names.includes("search_web")) return "Searching the web";
-  if (names.includes("fetch_rendered_page")) return "Rendering a page";
-  if (names.includes("fetch_url")) return "Fetching a web page";
-  return "Working";
 }
 
 async function consumeEvents(response, handler) {
@@ -254,18 +250,19 @@ export default function Home() {
           }));
         } else if (event.type === "tools") {
           current = event.messages;
-          setActivity(event.status || "Using tools");
+          const status = event.status || activityLabel(event.pending.map((call) => call.name));
+          setActivity(status);
           track("assistant_tools_used", {
             count: event.pending.length,
-            status: event.status || "tools",
+            status,
           });
 
           for (const call of event.pending) {
+            const runner = CLIENT_TOOLS[call.name];
+            if (!runner) continue;
             let result;
             try {
-              if (call.name === "run_js") result = await runInSandbox(call.code);
-              else if (call.name === "run_python") result = await runInPython(call.code);
-              else continue;
+              result = await runner(call.code);
             } catch (cause) {
               result = { ok: false, output: cause.message };
             }

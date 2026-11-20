@@ -1,6 +1,6 @@
-import { fetchPage, fetchRenderedPage } from "../../../lib/web-fetch";
-import { searchWeb } from "../../../lib/web-search";
-import { SYSTEM_PROMPT } from "../../../lib/system-prompt";
+import { TOOLS, TOOL_DEFINITIONS, getTool } from "../../../lib/tool-registry";
+import { executeServerTool } from "../../../lib/tool-executors";
+import { buildSystemPrompt } from "../../../lib/system-prompt";
 import { isUnlocked } from "../../../lib/session";
 import { clientKey, rateLimit } from "../../../lib/rate-limit";
 
@@ -14,86 +14,9 @@ const MAX_TOOL_CALLS_PER_ROUND = 3;
 const MAX_TOOL_CODE_CHARS = 20_000;
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
 const ALLOWED_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"];
-const ALLOWED_TOOLS = new Set([
-  "search_web",
-  "fetch_url",
-  "fetch_rendered_page",
-  "run_js",
-  "run_python",
-]);
+const ALLOWED_TOOLS = new Set(TOOLS.map((tool) => tool.name));
 
-const tools = [
-  {
-    type: "function",
-    function: {
-      name: "search_web",
-      description:
-        "Search the web for a query and return titles, URLs, and snippets. Use when you need to find pages or current information and do not have a specific URL.",
-      parameters: {
-        type: "object",
-        properties: { query: { type: "string", description: "What to search for." } },
-        required: ["query"],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "fetch_url",
-      description:
-        "Fetch a public web page by URL and return its readable text. Use when you have a specific URL and expect static HTML.",
-      parameters: {
-        type: "object",
-        properties: { url: { type: "string", description: "An absolute http or https URL." } },
-        required: ["url"],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "fetch_rendered_page",
-      description:
-        "Read a public page through a headless browser and return it as markdown. Use for JavaScript-heavy pages and PDFs, or when fetch_url returns little content.",
-      parameters: {
-        type: "object",
-        properties: { url: { type: "string", description: "An absolute http or https URL." } },
-        required: ["url"],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "run_js",
-      description:
-        "Execute JavaScript in a sandboxed browser iframe with console output. Use for JS calculations, data work, and verifying snippets. No network access.",
-      parameters: {
-        type: "object",
-        properties: { code: { type: "string", description: "JavaScript code to execute." } },
-        required: ["code"],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "run_python",
-      description:
-        "Execute Python in a sandboxed browser iframe via Pyodide with stdout captured. Use for Python calculations and data work. Standard library only; no network or file access.",
-      parameters: {
-        type: "object",
-        properties: { code: { type: "string", description: "Python code to execute." } },
-        required: ["code"],
-        additionalProperties: false,
-      },
-    },
-  },
-];
+const tools = TOOL_DEFINITIONS;
 
 function toolResult(id, value) {
   return {
@@ -168,22 +91,7 @@ function validateMessages(input) {
 
 async function runServerTool(name, args, id) {
   try {
-    if (name === "search_web") {
-      return toolResult(id, { ok: true, ...(await searchWeb(args.query)) });
-    }
-
-    if (name === "fetch_url" || name === "fetch_rendered_page") {
-      const page = name === "fetch_url" ? await fetchPage(args.url) : await fetchRenderedPage(args.url);
-      return toolResult(id, {
-        ok: true,
-        url: page.url,
-        title: page.title,
-        text: page.text.slice(0, 14_000),
-        truncated: page.truncated,
-      });
-    }
-
-    return toolResult(id, { ok: false, error: `Unknown tool: ${name}` });
+    return toolResult(id, await executeServerTool(name, args));
   } catch (error) {
     return toolResult(id, { ok: false, error: error.message });
   }
@@ -264,9 +172,7 @@ export async function POST(request) {
     typeof body.persona === "string" && body.persona.trim()
       ? body.persona.trim().slice(0, 4000)
       : "";
-  const systemPrompt = persona
-    ? `${SYSTEM_PROMPT}\n\nAdditional user instructions:\n${persona}`
-    : SYSTEM_PROMPT;
+  const systemPrompt = buildSystemPrompt(persona);
 
   const encoder = new TextEncoder();
 
@@ -382,7 +288,9 @@ export async function POST(request) {
           reader.releaseLock();
           if (usage) send({ type: "usage", usage });
 
-          const toolCalls = [...calls.values()].sort((a, b) => a.index - b.index);
+          const toolCalls = [...calls.values()]
+            .sort((a, b) => a.index - b.index)
+            .map((call, index) => ({ ...call, id: call.id || `call_${index}_${round}` }));
           if (toolCalls.length > MAX_TOOL_CALLS_PER_ROUND) {
             send({
               type: "error",
@@ -409,38 +317,50 @@ export async function POST(request) {
           const statusTexts = [];
 
           for (const call of toolCalls) {
-            const id = call.id || `call_${call.index}_${round}`;
+            const id = call.id;
             const name = call.function?.name;
+            const tool = getTool(name);
             let args = {};
 
             try {
               const parsed = JSON.parse(call.function?.arguments || "{}");
-              args = parsed && typeof parsed === "object" ? parsed : {};
+              args = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
             } catch {
               current.push(toolResult(id, { ok: false, error: "Invalid tool arguments." }));
               continue;
             }
 
-            if (name === "run_js" || name === "run_python") {
+            if (!tool) {
+              current.push(toolResult(id, { ok: false, error: `Unknown tool: ${name}` }));
+              continue;
+            }
+
+            if (tool.executor === "client") {
               if (typeof args.code !== "string" || args.code.length > MAX_TOOL_CODE_CHARS) {
                 current.push(toolResult(id, { ok: false, error: "Code is invalid or too long." }));
                 continue;
               }
               pending.push({ id, name, code: args.code });
-              statusTexts.push(name === "run_js" ? "Running JavaScript" : "Running Python");
-            } else if (name === "search_web") {
-              statusTexts.push("Searching the web");
-              current.push(await runServerTool(name, args, id));
-            } else if (name === "fetch_url" || name === "fetch_rendered_page") {
-              if (typeof args.url !== "string" || args.url.length > 2_048) {
-                current.push(toolResult(id, { ok: false, error: "Invalid URL argument." }));
-                continue;
-              }
-              statusTexts.push(name === "fetch_url" ? "Fetching a page" : "Rendering a page");
-              current.push(await runServerTool(name, args, id));
-            } else {
-              current.push(toolResult(id, { ok: false, error: `Unknown tool: ${name}` }));
+              statusTexts.push(tool.status);
+              continue;
             }
+
+            const required = tool.parameters.required || [];
+            const missing = required.filter(
+              (key) => args[key] === undefined || args[key] === null || args[key] === ""
+            );
+            if (missing.length > 0) {
+              current.push(toolResult(id, { ok: false, error: `Missing argument: ${missing.join(", ")}` }));
+              continue;
+            }
+
+            if (typeof args.url === "string" && args.url.length > 2_048) {
+              current.push(toolResult(id, { ok: false, error: "Invalid URL argument." }));
+              continue;
+            }
+
+            statusTexts.push(tool.status);
+            current.push(await runServerTool(name, args, id));
           }
 
           if (pending.length > 0) {

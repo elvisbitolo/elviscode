@@ -13,6 +13,8 @@ A lightweight ChatGPT-style chat app for coding and authorized security work. Th
 - `fetch_rendered_page` — reads JavaScript-heavy pages and PDFs through a headless-browser reader.
 - `run_js` — runs JavaScript in a sandboxed browser iframe with no network access.
 - `run_python` — runs Python via Pyodide in a sandboxed iframe (standard library only).
+- `calculate`, `convert_units`, `get_time`, `hash_text`, `base64`, `format_json`, and `generate_uuid` — local server-side utilities for common tasks.
+- Tool metadata is centralized in one registry, so adding a tool requires one entry plus its executor.
 - Chat history, preferences, and usage estimates are saved in the browser.
 - Optional password gate, per-instance rate limiting, and optional Upstash Redis for shared limits.
 - Vercel Web Analytics page views and privacy-safe custom usage events.
@@ -45,7 +47,10 @@ Add the same variables under Project → Settings → Environment Variables, the
 
 ## Configuration
 
-- `src/lib/system-prompt.js` — assistant instructions, scope, and tool guidance.
+- `src/lib/tool-registry.js` — the single source of truth for tool names, schemas, prompts, and status labels.
+- `src/lib/tool-executors.js` — server-side implementations for non-browser tools.
+- `src/lib/calculate.js` / `src/lib/units.js` — safe math evaluation and unit conversion helpers.
+- `src/lib/system-prompt.js` — assistant instructions, scope, and tool guidance generated from the registry.
 - `src/app/api/chat/route.js` — tool-calling agent loop and model proxy.
 - `src/lib/web-fetch.js` — URL fetching with SSRF, size, and timeout limits.
 - `src/lib/web-search.js` — web search with Jina Search or DuckDuckGo fallback.
