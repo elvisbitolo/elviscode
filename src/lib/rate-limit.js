@@ -1,4 +1,14 @@
+import { Redis } from "@upstash/redis";
+
 const buckets = new Map();
+
+const redis =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+    ? new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      })
+    : null;
 
 export function clientKey(request) {
   const forwarded = request.headers.get("x-forwarded-for");
@@ -6,7 +16,24 @@ export function clientKey(request) {
   return request.headers.get("x-real-ip") || "local";
 }
 
-export function rateLimit(key, limit, windowMs) {
+export async function rateLimit(key, limit, windowMs) {
+  if (redis) {
+    try {
+      const now = Date.now();
+      const window = Math.floor(now / windowMs);
+      const redisKey = `elviscode:rl:${key}:${window}`;
+      const count = await redis.incr(redisKey);
+      if (count === 1) await redis.expire(redisKey, Math.ceil(windowMs / 1000) + 5);
+      if (count <= limit) return { ok: true };
+      return {
+        ok: false,
+        retryAfter: Math.max(1, Math.ceil(((window + 1) * windowMs - now) / 1000)),
+      };
+    } catch {
+      return { ok: true };
+    }
+  }
+
   const now = Date.now();
 
   if (buckets.size > 1000) {

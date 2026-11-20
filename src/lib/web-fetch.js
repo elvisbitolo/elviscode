@@ -59,7 +59,7 @@ const namedEntities = {
   rdquo: '"',
 };
 
-function decodeEntities(value) {
+export function decodeEntities(value) {
   return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity) => {
     if (entity[0] === "#") {
       const hex = entity[1].toLowerCase() === "x";

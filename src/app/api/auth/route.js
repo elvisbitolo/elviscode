@@ -3,7 +3,7 @@ import { isPasswordProtected, passwordMatches, setSessionCookie } from "../../..
 import { clientKey, rateLimit } from "../../../lib/rate-limit";
 
 export async function POST(request) {
-  const limit = rateLimit(`auth:${clientKey(request)}`, 8, 60_000);
+  const limit = await rateLimit(`auth:${clientKey(request)}`, 8, 60_000);
   if (!limit.ok) {
     return NextResponse.json(
       { error: "Too many attempts. Try again shortly." },
