@@ -14,8 +14,41 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "ElvisCode",
-  description: "A lightweight coding and security assistant chat.",
+  metadataBase: new URL("https://elviscode.vercel.app"),
+  applicationName: "ElvisCode",
+  title: {
+    default: "ElvisCode — Your AI Workspace for Building",
+    template: "%s | ElvisCode",
+  },
+  description:
+    "A focused AI workspace for software development, web research, code analysis, and secure sandboxed JavaScript and Python execution.",
+  keywords: [
+    "AI coding assistant",
+    "JavaScript",
+    "Python",
+    "software development",
+    "code analysis",
+    "web research",
+    "developer tools",
+  ],
+  openGraph: {
+    type: "website",
+    url: "https://elviscode.vercel.app",
+    siteName: "ElvisCode",
+    title: "ElvisCode — Your AI Workspace for Building",
+    description:
+      "Think, build, research, and test code in one focused AI workspace.",
+  },
+  twitter: {
+    card: "summary",
+    title: "ElvisCode — Your AI Workspace for Building",
+    description:
+      "Think, build, research, and test code in one focused AI workspace.",
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export default function RootLayout({ children }) {
