@@ -1156,7 +1156,7 @@
   .gateCard { padding: 30px 22px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  .shell *, .shell *::before, .shell *::after, .gate *, .gate *::before, .gate *::after {
     scroll-behavior: auto !important;
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
