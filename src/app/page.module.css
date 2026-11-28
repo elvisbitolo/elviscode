@@ -1121,11 +1121,11 @@
   box-shadow: 0 8px 22px rgba(74, 99, 221, .24);
 }
 
-:where(button, input, textarea, select):focus-visible {
+.shell :where(button, input, textarea, select):focus-visible, .gate :where(button, input, textarea, select):focus-visible {
   outline: 2px solid #8da3ff;
   outline-offset: 3px;
 }
-button { -webkit-tap-highlight-color: transparent; }
+.shell button, .gate button { -webkit-tap-highlight-color: transparent; }
 
 @media (prefers-color-scheme: light) {
   /* Keep the product's intentional dark workspace consistent across devices. */
